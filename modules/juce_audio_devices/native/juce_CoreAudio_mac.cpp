@@ -1263,9 +1263,16 @@ public:
     bool start()
     {
         numOverloads = 0;
-        return created
+        const auto started = created
             && device.isAlive()
             && tryMultiple ([&] { return checkStatus (AudioDeviceStart (device.getId(), processorId)); }, 3);
+        running = started;
+
+        // A death notification can arrive before the assignment above.
+        if (started && ! device.isAlive())
+            running = false;
+
+        return running;
     }
 
     void stop()
