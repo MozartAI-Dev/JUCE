@@ -1149,20 +1149,20 @@ public:
     //==============================================================================
     void clear()
     {
-        events.clearQuick();
+        eventCount = 0;
     }
 
     Steinberg::int32 PLUGIN_API getEventCount() override
     {
-        return (Steinberg::int32) events.size();
+        return eventCount;
     }
 
     // NB: This has to cope with out-of-range indexes from some plugins.
     Steinberg::tresult PLUGIN_API getEvent (Steinberg::int32 index, Steinberg::Vst::Event& e) override
     {
-        if (isPositiveAndBelow ((int) index, events.size()))
+        if (isPositiveAndBelow ((int) index, eventCount))
         {
-            e = events.getReference ((int) index);
+            e = events[(size_t) index];
             return Steinberg::kResultTrue;
         }
 
@@ -1171,7 +1171,10 @@ public:
 
     Steinberg::tresult PLUGIN_API addEvent (Steinberg::Vst::Event& e) override
     {
-        events.add (e);
+        if (eventCount >= (Steinberg::int32) events.size())
+            return Steinberg::kResultFalse;
+
+        events[(size_t) eventCount++] = e;
         return Steinberg::kResultTrue;
     }
 
@@ -1274,7 +1277,6 @@ private:
                              StoredMidiMapping* midiMapping,
                              Callback&& callback)
     {
-        enum { maxNumEvents = 2048 }; // Steinberg's Host Checker states that no more than 2048 events are allowed at once
         int numEvents = 0;
 
         for (const auto metadata : midiBuffer)
@@ -1286,7 +1288,13 @@ private:
         }
     }
 
-    Array<Steinberg::Vst::Event, CriticalSection> events;
+    static constexpr int maxNumEvents = 2048; // Steinberg's Host Checker states that no more than 2048 events are allowed at once
+
+    // Each list belongs to one process call: the host fills input events before
+    // invoking the processor and drains output events after it returns. Fixed
+    // storage avoids both OS mutex calls and first-block growth on that thread.
+    std::array<Steinberg::Vst::Event, maxNumEvents> events{};
+    Steinberg::int32 eventCount = 0;
     Atomic<int> refCount;
 
     static Steinberg::int16 createSafeChannel (int channel) noexcept  { return (Steinberg::int16) jlimit (0, 15, channel - 1); }
