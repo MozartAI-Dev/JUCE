@@ -455,7 +455,10 @@ public:
 
         querySupportedBufferSizes (*format, tempClient);
         querySupportedSampleRates (*format, tempClient);
-        maxNumChannels = queryMaxNumChannels (tempClient);
+        // Default-device matching creates temporary endpoints to compare sample
+        // rates. Defer the much more expensive channel scan until a caller needs
+        // channel names or opens the endpoint, retaining the same query client.
+        channelQueryClient = std::move (tempClient);
     }
 
     virtual ~WASAPIDeviceBase()
@@ -466,11 +469,23 @@ public:
 
     bool isOk() const noexcept   { return defaultBufferSize > 0 && defaultSampleRate > 0; }
 
+    int getMaxNumChannels()
+    {
+        if (channelQueryClient != nullptr)
+        {
+            maxNumChannels = queryMaxNumChannels (channelQueryClient);
+            channelQueryClient = nullptr;
+        }
+
+        return maxNumChannels;
+    }
+
     bool openClient (const double newSampleRate, const BigInteger& newChannels, const int bufferSizeSamples)
     {
         sampleRate = newSampleRate;
         channels = newChannels;
-        channels.setRange (maxNumChannels, channels.getHighestBit() + 1 - maxNumChannels, false);
+        const auto availableChannels = getMaxNumChannels();
+        channels.setRange (availableChannels, channels.getHighestBit() + 1 - availableChannels, false);
         numChannels = channels.getHighestBit() + 1;
 
         if (numChannels == 0)
@@ -552,7 +567,7 @@ public:
     WASAPIDeviceBaseDelegate& delegate;
 
     double sampleRate = 0, defaultSampleRate = 0;
-    int numChannels = 0, actualNumChannels = 0, maxNumChannels = 0, defaultNumChannels = 0;
+    int numChannels = 0, actualNumChannels = 0, defaultNumChannels = 0;
     int minBufferSize = 0, defaultBufferSize = 0, latencySamples = 0;
     int lowLatencyBufferSizeMultiple = 0, lowLatencyMaxBufferSize = 0;
     DWORD defaultFormatChannelMask = 0;
@@ -566,6 +581,9 @@ public:
     virtual void updateFormat (bool isFloat) = 0;
 
 private:
+    int maxNumChannels = 0;
+    ComSmartPtr<IAudioClient> channelQueryClient;
+
     //==============================================================================
     struct SessionEventCallback final : public ComBaseClassHelper<IAudioSessionEvents>
     {
@@ -815,9 +833,11 @@ private:
         return numBits < 32 ? static_cast<DWORD> ((1u << numBits) - 1u) : 0;
     }
 
-    std::optional<WAVEFORMATEXTENSIBLE> findSupportedFormat (IAudioClient* clientToUse, int newNumChannels, double newSampleRate) const
+    std::optional<WAVEFORMATEXTENSIBLE> findSupportedFormat (IAudioClient* clientToUse, int newNumChannels, double newSampleRate)
     {
-        for (auto ch = newNumChannels; ch <= maxNumChannels; ++ch)
+        const auto availableChannels = getMaxNumChannels();
+
+        for (auto ch = newNumChannels; ch <= availableChannels; ++ch)
         {
             auto mixFormatChannelMask = (ch == defaultNumChannels ? defaultFormatChannelMask : channelMaskWithLowestNBitsSet (ch));
 
@@ -1336,7 +1356,9 @@ public:
 
         StringArray outChannels;
 
-        for (int i = 1; i <= outputDevice->maxNumChannels; ++i)
+        const auto availableChannels = outputDevice->getMaxNumChannels();
+
+        for (int i = 1; i <= availableChannels; ++i)
             outChannels.add ("Output channel " + String (i));
 
         return outChannels;
@@ -1349,7 +1371,9 @@ public:
 
         StringArray inChannels;
 
-        for (int i = 1; i <= inputDevice->maxNumChannels; ++i)
+        const auto availableChannels = inputDevice->getMaxNumChannels();
+
+        for (int i = 1; i <= availableChannels; ++i)
             inChannels.add ("Input channel " + String (i));
 
         return inChannels;
